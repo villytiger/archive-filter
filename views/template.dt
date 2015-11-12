@@ -1,0 +1,124 @@
+doctype strict
+html(xmlns='http://www.w3.org/1999/xhtml')
+    head
+        :css
+            body,html {
+            background:#fff;
+            font-family:"Bitstream Vera Sans","Lucida Grande",
+            "Lucida Sans Unicode",Lucidux,Verdana,Lucida,sans-serif;
+            }
+            tr:nth-child(even) {
+            background:#f4f4f4;
+            }
+            th,td {
+            padding:0.1em 0.5em;
+            }
+            th {
+            text-align:left;
+            font-weight:bold;
+            background:#eee;
+            border-bottom:1px solid #aaa;
+            }
+            #list {
+            border:1px solid #aaa;
+            width:100%;
+            }
+            a {
+            color:#a33;
+            }
+            a:hover {
+            color:#e33;
+            }
+        :javascript
+            window.onload = function () {
+                sort('name');
+
+                var sizes = document.getElementsByClassName('size');
+                sizes = Array.prototype.slice.call(sizes);
+
+                for (var i = 0; i != sizes.length; ++i) {
+                    var v = sizes[i].getAttribute('data-value');
+                    if (v > 1073741824) {
+                       v = Math.floor(v / 1073741824) + "G";
+                    } else if (v > 1048576) {
+                       v = Math.floor(v / 1048576) + "M";
+                    } else if (v > 1024) {
+                       v = Math.floor(v / 1024) + "K";
+                    }
+                    sizes[i].innerHTML = v;
+                }
+            }
+
+            function transformSize(v, order) {
+                if (v == "-") return 0;
+                else return parseInt(v);
+            }
+
+            function cmp(a, b, column, order) {
+                if (column == "size") {
+                    a = transformSize(a);
+                    b = transformSize(b);
+                }
+
+                if (order == 'descending') return a < b;
+                else return b < a;
+            }
+
+            function sort(column, order) {
+                var list = document.getElementById('list');
+                var items = list.children;
+                items = Array.prototype.slice.call(items, 1);
+
+                items.sort(function (a, b) {
+                    var av = a.getElementsByClassName(column)[0].getAttribute('data-value');
+                    var bv = b.getElementsByClassName(column)[0].getAttribute('data-value');
+                    return cmp(av, bv, column, order);
+                });
+
+                for (var i = 0; i != items.length; ++i) {
+                    list.appendChild(items[i]);
+                }
+            }
+        title
+            | Index of #{currentPath}
+    body
+        h1
+            | Index of #{currentPath}
+        table(cellpadding='0.1em', cellspacing='0')
+            colgroup
+                col(width='0%')
+                col(width='55%')
+                col(width='20%')
+                col(width='25%')
+            thead
+                tr
+                    th
+                    th
+                        a(href='#', onclick='javascript:sort("name")') File Name
+                        a(href='#', onclick='javascript:sort("name", "descending")')  ↓
+                    th
+                        a(href='#', onclick='javascript:sort("size")') File Size
+                        a(href='#', onclick='javascript:sort("size", "descending")')  ↓
+                    th
+                        a(href='#', onclick='javascript:sort("date")') Date
+                        a(href='#', onclick='javascript:sort("date", "descending")')  ↓
+            tbody#list
+                tr
+                    td
+                    td
+                        a(href='#{parentUrl}') Parent directory/
+                    td -
+                    td -
+                - foreach (f; files)
+                    tr
+                        - auto size = f.isDirectory ? "-" : f.size.to!string();
+                        - auto date = f.timeModified.timezone ? f.timeModified.to!string() : "-";
+                        td
+                            - if (f.downloadUrl)
+                                a(href='#{f.downloadUrl}') download
+                        td(class='name', data-value='#{f.name}')
+                            a(href='#{f.url}') #{f.name}
+                        td(class='size', data-value='#{size}')
+                            | #{size}
+                        td(class='date', data-value='#{date}')
+                            | #{date}
