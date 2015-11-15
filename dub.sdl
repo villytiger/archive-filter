@@ -3,4 +3,13 @@ description "A simple vibe.d server application."
 copyright "Copyright © 2015, vt"
 authors "vt"
 dependency "vibe-d" version="~>0.7.23"
-#versions "VibeDefaultMain"
+
+configuration "console" {
+    targetType "executable"
+    versions "console"
+}
+
+configuration "web" {
+    targetType "executable"
+    versions "VibeDefaultMain"
+}

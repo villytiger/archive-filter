@@ -3,21 +3,11 @@ import std.getopt;
 import std.range.primitives;
 
 import vibe.d;
-
-import std.stdio;
+import vibe.stream.stdio: StderrStream, StdinStream, StdoutStream;
 
 static immutable PKZIP_LOCAL_FILE_HEADER_MAGIC = [0x50, 0x4b ,0x03, 0x04];
 static immutable PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC = [0x50, 0x4b ,0x01, 0x02];
 static immutable PKZIP_END_OF_CENTRAL_DIRECTORY_RECORD_MAGIC = [0x50, 0x4b ,0x05, 0x06];
-
-/*shared static this() {
-	auto settings = new HTTPServerSettings;
-	settings.port = 8080;
-	settings.bindAddresses = ["::1", "127.0.0.1"];
-	listenHTTP(settings, &hello);
-
-	logInfo("Please open http://127.0.0.1:8080/ in your browser.");
-        }*/
 
 type get(type)(InputStream stream) {
 	ubyte[type.sizeof] result;
@@ -27,7 +17,16 @@ type get(type)(InputStream stream) {
 
 void skip(InputStream stream, size_t length) {
         auto s = cast(RandomAccessStream)stream;
-        s.seek(s.tell() + length);
+	if (s) {
+		s.seek(s.tell() + length);
+	} else {
+		ubyte[4096] b;
+		while (length) {
+			auto l = min(b.length, length);
+			stream.read(b[0..l]);
+			length -= l;
+		}
+	}
 }
 
 class UngetInputStream: InputStream {
@@ -71,12 +70,6 @@ public:
 	}
 }
 
-/*void hello(HTTPServerRequest req, HTTPServerResponse res) {
-	auto input = openFile("linux.zip");
-	auto recordMagic = input.get!uint();
-	res.writeBody(nativeToLittleEndian(recordMagic));
-        }*/
-
 class PathFilter {
 private:
         string mPath;
@@ -98,6 +91,7 @@ private:
 	UngetInputStream mInput;
 	OutputStream mOutput;
 	PathFilter mFilter;
+	uint[string] mOffsets;
 
 public:
 	this(InputStream input, OutputStream output, PathFilter filter) {
@@ -130,6 +124,8 @@ public:
 				mInput.sourceStream.skip(compressedSize);
 				continue;
 			}
+
+			mOffsets[fileName.to!string()] = centralDirectoryOffset;
 
 			mOutput.write(header);
 			mOutput.write(fileName);
@@ -164,6 +160,8 @@ public:
 				continue;
 			}
 
+			header[42..46] = nativeToLittleEndian(mOffsets[fileName]);
+
 			mOutput.write(header);
 			mOutput.write(fileName);
 			mOutput.write(mInput, extraFieldLength + fileCommentLength);
@@ -188,28 +186,125 @@ public:
 		mOutput.write(header);
 		mOutput.write(mInput);
 	}
+
+	string[] list() {
+		Appender!(string[]) result;
+
+		while (!mInput.empty()) {
+			ubyte[30] header;
+			mInput.read(header[0..PKZIP_LOCAL_FILE_HEADER_MAGIC.length]);
+			if (header[0..PKZIP_LOCAL_FILE_HEADER_MAGIC.length] != PKZIP_LOCAL_FILE_HEADER_MAGIC) {
+				return null;
+			} else {
+				mInput.read(header[4..$]);
+			}
+
+			auto compressedSize = littleEndianToNative!uint(header[18..22]);
+			auto fileNameLength = littleEndianToNative!ushort(header[26..28]);
+			auto extraFieldLength = littleEndianToNative!ushort(header[28..30]);
+
+			auto fileNameBuf = new char[fileNameLength];
+			mInput.read(cast(ubyte[])fileNameBuf);
+			auto fileName = fileNameBuf.to!string();
+
+			mInput.sourceStream.skip(extraFieldLength);
+			mInput.sourceStream.skip(compressedSize);
+
+			if (!mFilter.match(fileName)) continue;
+			result.put(fileName);
+			mOutput.write(fileName ~ "\n");
+		}
+
+		mOutput.write(result.data.to!string ~ "\n");
+
+		return result.data;
+	}
 }
 
-void main(string[] args) {
-        string inputFilePath, outputFilePath, filePath;
-        auto helpInformation = getopt(args, "input|i", &inputFilePath, "output|o", &outputFilePath,
-                                      "file|f", &filePath);
-        if (helpInformation.helpWanted) {
-                defaultGetoptPrinter("Archive filter. Allows to filter zip archive with path "
-                                     "to file or directory inside archive getting "
-                                     "smaller archive.",
-                                     helpInformation.options);
-                return;
+version (console) {
+	void main(string[] args) {
+		string inputFilePath, outputFilePath, filePath;
+		auto helpInformation = getopt(args, "input|i", &inputFilePath, "output|o", &outputFilePath,
+					      "file|f", &filePath);
+		if (helpInformation.helpWanted || !filePath) {
+			defaultGetoptPrinter("Archive filter. Allows to filter zip archive with path "
+					     "to file or directory inside archive getting "
+					     "smaller archive.",
+					     helpInformation.options);
+			return;
+		}
+
+		InputStream input;
+		if (inputFilePath) input = openFile(inputFilePath);
+		else input = new StdinStream;
+
+		OutputStream output;
+		if (outputFilePath) output = openFile(outputFilePath, FileMode.createTrunc);
+		else output = new StdoutStream;
+
+		auto filter = new PathFilter(filePath);
+		auto processor = new ArchiveProcessor(input, output, filter);
+
+		processor.process();
+		output.finalize();
+	}
+} else {
+	shared static this() {
+		auto settings = new HTTPServerSettings;
+		settings.port = 8080;
+		settings.bindAddresses = ["::1", "127.0.0.1"];
+		listenHTTP(settings, &processRequest);
+
+		logInfo("Please open http://127.0.0.1:8080/ in your browser.");
+	}
+
+	auto splitPath(string path) {
+		auto pathArray = path.split('/');
+		for (auto i = 0; i != pathArray.length; ++i) {
+			auto s = pathArray[0..$-i].join('/');
+			if (existsFile(s)) {
+				auto internal = pathArray[$-i..$].join('/');
+				return tuple!("file", "internal")(s, internal);
+			}
+		}
+
+		return tuple!("file", "internal")("", "");
+	}
+
+	void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
+		auto q = req.query.get("q");
+
+		auto path = splitPath(req.path);
+		if (!path.file) return;
+
+		if (q && q == "read") {
+			res.contentType = "application/octet";
+
+			auto input = openFile(path.file);
+			scope (exit) input.close();
+
+			auto filter = new PathFilter(path.internal);
+			auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
+			processor.process();
+		} else if (path.internal && path.internal.back == '/') {
+			res.contentType = "text/plain";
+
+			auto input = openFile(path.file);
+			scope (exit) input.close();
+
+			auto filter = new PathFilter(path.internal);
+			auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
+			auto fileList = processor.list();
+
+			res.bodyWriter.write("sdfdfg");
+			foreach (fileName; fileList) {
+				res.bodyWriter.write("asd\n");
+				res.bodyWriter.write(fileName);
+				//res.bodyWriter.write("\0");
+			}
+		} else {
+			res.bodyWriter.write(path.file ~ '\n');
+			res.bodyWriter.write(path.internal ~ '\n');
+		}
         }
-
-        if (!inputFilePath || !outputFilePath) {
-                return;
-        }
-
-        auto input = openFile(inputFilePath);
-        auto output = openFile(outputFilePath, FileMode.createTrunc);
-        auto filter = new PathFilter(filePath);
-
-        auto processor = new ArchiveProcessor(input, output, filter);
-	processor.process();
 }
