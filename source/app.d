@@ -3,8 +3,11 @@ import std.algorithm.sorting: multiSort;
 import std.bitmanip: littleEndianToNative, nativeToLittleEndian;
 import std.functional: binaryReverseArgs;
 import std.getopt;
-import std.path: baseName;
+import std.path: absolutePath, asNormalizedPath, baseName, buildNormalizedPath, chainPath,
+        globMatch, pathSplitter;
+import std.range: dropBack;
 import std.range.primitives;
+import std.stdio: stderr;
 
 import vibe.d;
 import vibe.stream.stdio: StderrStream, StdinStream, StdoutStream;
@@ -83,17 +86,27 @@ private:
         string mPath;
 
 public:
-        this(Path path) {
-                mPath = path.empty ? null : path.toString().strip('/');
+        this(string path) {
+                mPath = path;
         }
 
         bool match(string path) {
-                if (mPath.empty) return true;
-                else if (path.length < mPath.length) return false;
-                else if (!path.startsWith(mPath)) return false;
-                else if (mPath.length == path.length) return true;
-                else if (path[mPath.length] == '/') return true;
+                if (path.startsWith(mPath)) return true;
                 else return false;
+        }
+}
+
+class GlobFilter: ArchiveFilter {
+private:
+        string mPattern;
+
+public:
+        this(string pattern) {
+                mPattern = pattern;
+        }
+
+        bool match(string path) {
+                return globMatch(path, mPattern);
         }
 }
 
@@ -102,21 +115,36 @@ private:
         string mPath;
 
 public:
-        this(Path path) {
-                mPath = path.empty ? null : path.toString().strip('/');
+        this(string path) {
+                mPath = path;
+                if (!path.empty && !path.endsWith('/')) mPath ~= '/';
         }
 
         bool match(string path) {
-                if (!path.startsWith(mPath)) {
-                        return false;
-                } else if (!mPath.empty) {
-                        if (path.length < mPath.length + 2) return false;
-                        else if (path[mPath.length] != '/') return false;
-                        else path = path[mPath.length+1..$];
-                }
-                auto p = path.countUntil('/');
-                return p == -1 || p + 1 == path.length;
+                if (!path.startsWith(mPath)) return false;
+                else if (path[mPath.length..$].stripRight('/').canFind('/')) return false;
+                else if (path.length == mPath.length) return false;
+                else return true;
         }
+}
+
+align(1) struct LocalFileHeader {
+        enum MAGIC = 0x504B0304;
+        uint signatue;
+        ushort ver;
+        ushort flags;
+        ushort compression;
+        ushort modificationTime;
+        ushort modificationDate;
+        uint crc32;
+        uint compressedSize;
+        uint uncompressedSize;
+        ushort fileNameLength;
+        ushort extraFieldLength;
+}
+
+ubyte[] byteBuffer(Type)(ref Type v) {
+        return (cast(ubyte*)&v)[0..v.sizeof];
 }
 
 class ArchiveProcessor {
@@ -124,7 +152,48 @@ private:
 	UngetInputStream mInput;
 	OutputStream mOutput;
 	ArchiveFilter mFilter;
-	uint[string] mOffsets;
+        uint[string] mOffsets;
+
+        void processLocalFiles(Delegate)(Delegate process) {
+                while (!mInput.empty()) {
+                        LocalFileHeader header = void;
+                        mInput.read(header.byteBuffer[0..4]);
+                        if (header.signature
+                }
+        }
+
+                /*void processZip64EndOfCentralDirectoryRecord() {
+                ubyte[56] header;
+                mInput.read(header);
+                if (header[0..4] != PKZIP_ZIP64__END_OF_CENTRAL_DIRECTORY_RECORD_MAGIC) {
+                        mInput.unget(header[0..4]);
+                        return;
+                }
+
+                header[24..32] = nativeToLittleEndian(totalEntries);
+                header[32..40] = nativeToLittleEndian(totalEntries);
+                header[40..48] = nativeToLittleEndian(centralDirectorySize);
+                header[48..56] = nativeToLittleEndian(centralDirectoryOffset);
+
+                mOutput.write(header);
+        }
+
+        void processZip64EndOfCentralDirectoryLocator() {
+                ubyte[20] header;
+                mInput.read(header);
+                if (header[0..4] != PKZIP_ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_MAGIC) {
+                        mInput.unget(header[0..4]);
+                        return;
+                }
+
+                header[24..32] = nativeToLittleEndian(totalEntries);
+                header[32..40] = nativeToLittleEndian(totalEntries);
+                header[40..48] = nativeToLittleEndian(centralDirectorySize);
+                header[48..56] = nativeToLittleEndian(centralDirectoryOffset);
+
+                mOutput.write(header);
+                mOutput.write(mInput);
+                }*/
 
 public:
 	this(InputStream input, OutputStream output, ArchiveFilter filter) {
@@ -133,7 +202,11 @@ public:
 		mFilter = filter;
 	}
 
-	void process() {
+        void process() {
+                void delegate() processFile;
+
+                processLocalFiles(processFile);
+
 		uint centralDirectoryOffset = 0;
 		while (!mInput.empty()) {
 			ubyte[30] header;
@@ -173,7 +246,8 @@ public:
 		while (!mInput.empty()) {
 			ubyte[46] header;
 			mInput.read(header[0..PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC.length]);
-			if (header[0..PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC.length] != PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC) {
+                        if (header[0..PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC.length] != PKZIP_CENTRAL_DIRECTORY_FILE_HEADER_MAGIC) {
+                                std.stdio.writefln("asd: %(0x%0.2x, %)", header[0..4]);
 				mInput.unget(header[0..4]);
 				break;
 			} else {
@@ -205,7 +279,10 @@ public:
 		}
 
 		ubyte[22] header;
-		mInput.read(header);
+                mInput.read(header);
+                std.stdio.writefln("0x%x", centralDirectoryOffset);
+                std.stdio.writefln("0x%x", centralDirectorySize);
+                std.stdio.writefln("%(0x%0.2x, %)", header);
 		if (header[0..PKZIP_END_OF_CENTRAL_DIRECTORY_RECORD_MAGIC.length] != PKZIP_END_OF_CENTRAL_DIRECTORY_RECORD_MAGIC) {
 			return;
 			//TODO throw
@@ -260,202 +337,187 @@ struct FileEntry {
         string downloadUrl;
 }
 
-version (console) {
-	void main(string[] args) {
-		string inputFilePath, outputFilePath, filePath;
-		auto helpInformation = getopt(args, "input|i", &inputFilePath, "output|o", &outputFilePath,
-					      "file|f", &filePath);
-		if (helpInformation.helpWanted || !filePath) {
-			defaultGetoptPrinter("Archive filter. Allows to filter zip archive with path "
-					     "to file or directory inside archive getting "
-					     "smaller archive.",
-					     helpInformation.options);
-			return;
-		}
+auto splitPath(Path documentRoot, Path path) {
+        Path localPath = path;
+        Path absolutePath = documentRoot ~ localPath;
+        absolutePath.endsWithSlash = false;
 
-		InputStream input;
-		if (inputFilePath) input = openFile(inputFilePath);
-		else input = new StdinStream;
-
-		OutputStream output;
-		if (outputFilePath) output = openFile(outputFilePath, FileMode.createTrunc);
-		else output = new StdoutStream;
-
-		auto filter = new DirectoryFilter(filePath);
-		auto processor = new ArchiveProcessor(input, output, filter);
-
-		processor.process();
-		output.finalize();
-	}
-} else {
-	shared static this() {
-		auto settings = new HTTPServerSettings;
-		settings.port = 8080;
-		settings.bindAddresses = ["::1", "127.0.0.1"];
-		listenHTTP(settings, &processRequest);
-
-		logInfo("Please open http://127.0.0.1:8080/ in your browser.");
-	}
-
-	auto splitPath(Path documentRoot, Path path) {
-		Path localPath = path;
-		Path absolutePath = documentRoot ~ localPath;
+        while (!localPath.empty && !existsFile(absolutePath)) {
+                localPath = localPath.parentPath;
+                absolutePath = absolutePath.parentPath;
                 absolutePath.endsWithSlash = false;
+        }
 
-		while (!localPath.empty && !existsFile(absolutePath)) {
-			localPath = localPath.parentPath;
-			absolutePath = absolutePath.parentPath;
-                        absolutePath.endsWithSlash = false;
-		}
+        if (absolutePath.getFileInfo().isDirectory) localPath.endsWithSlash = true;
 
-		if (absolutePath.getFileInfo().isDirectory) localPath.endsWithSlash = true;
+        auto internalPath = (documentRoot ~ path).relativeTo(absolutePath);
 
-		auto internalPath = (documentRoot ~ path).relativeTo(absolutePath);
+        return tuple!("local", "internal")(localPath, internalPath);
+}
 
-		return tuple!("local", "internal")(localPath, internalPath);
-	}
+FileEntry[] sortFiles(FileEntry[] files, HTTPServerRequest req) {
+        auto sortColumn = req.query.get("sort-column");
+        if (sortColumn) {
+                bool delegate(FileEntry, FileEntry) pred;
+                switch (req.query.get("sort-column")) {
+                default: pred = (f1, f2) => f1.name < f2.name; break;
+                case "size": pred = (f1, f2) => f1.isDirectory != f2.isDirectory ? f1.isDirectory > f2.isDirectory : f1.size < f2.size; break;
+                case "date": pred = (f1, f2) => f1.timeModified < f2.timeModified; break;
+                }
 
-        FileEntry[] sortFiles(FileEntry[] files, HTTPServerRequest req) {
-                auto sortColumn = req.query.get("sort-column");
-                if (sortColumn) {
-                        bool delegate(FileEntry, FileEntry) pred;
-                        switch (req.query.get("sort-column")) {
-                        default: pred = (f1, f2) => f1.name < f2.name; break;
-                        case "size": pred = (f1, f2) => f1.isDirectory != f2.isDirectory ? f1.isDirectory > f2.isDirectory : f1.size < f2.size; break;
-                        case "date": pred = (f1, f2) => f1.timeModified < f2.timeModified; break;
-                        }
-
-                        if (req.query.get("sort-order") == "descending") {
-                                files.sort!(binaryReverseArgs!pred);
-                        } else {
-                                files.sort!pred;
-                        }
+                if (req.query.get("sort-order") == "descending") {
+                        files.sort!(binaryReverseArgs!pred);
                 } else {
-                        files.multiSort!("a.isDirectory > b.isDirectory", "a.name < b.name");
+                        files.sort!pred;
                 }
-
-                return files;
+        } else {
+                files.multiSort!("a.isDirectory > b.isDirectory", "a.name < b.name");
         }
 
-        string humanReadableInteger(T)(T i) {
-                if (T r = i / 1000000000) return r.to!string ~ "G";
-                if (T r = i / 1000000) return r.to!string ~ "M";
-                if (T r = i / 1000) return r.to!string ~ "K";
-                else return i.to!string;
+        return files;
+}
+
+string humanReadableInteger(T)(T i) {
+        if (T r = i / 1000000000) return r.to!string ~ "G";
+        if (T r = i / 1000000) return r.to!string ~ "M";
+        if (T r = i / 1000) return r.to!string ~ "K";
+        else return i.to!string;
+}
+
+void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
+        string internalPath = req.query.get("path");
+        string globPattern = req.query.get("glob-pattern");
+
+        auto input = openFile(filePath);
+        scope (exit) input.close();
+
+        ArchiveFilter filter;
+        if (globPattern) filter = new GlobFilter(globPattern);
+        else filter= new PathFilter(internalPath);
+
+        auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
+
+        res.contentType = "application/octet";
+        res.headers["Content-Disposition"] = "attachment; filename=" ~ filePath.baseName;
+        processor.process();
+}
+
+void listArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
+        string internalPath = req.query.get("path");
+
+        auto input = openFile(filePath);
+        scope (exit) input.close();
+
+        auto filter = new DirectoryFilter(internalPath);
+        auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
+
+        res.contentType = "text/plain";
+        res.headers["Content-Disposition"] = "attachment; filename=" ~ filePath.baseName;
+        auto fileList = processor.list();
+
+        foreach (file; fileList) {
+                res.bodyWriter.write(file);
+                res.bodyWriter.write("\0");
+        }
+}
+
+void showArchive(string filePath, string urlPath,
+                 HTTPServerRequest req, HTTPServerResponse res) {
+        auto schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
+        auto internalPath = req.query.get("path");
+
+        auto input = openFile(filePath);
+        scope (exit) input.close();
+
+        auto filter = new DirectoryFilter(internalPath);
+        auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
+        auto fileList = processor.list();
+
+        Appender!(FileEntry[]) filesAppender;
+        foreach (f; fileList) {
+                auto name = f.baseName;
+                if (f.endsWith('/')) name ~= '/';
+
+                auto showUrl = urlPath ~ "?action=show&path=" ~ f.urlEncode;
+                auto downloadUrl = urlPath ~ "?action=get&path=" ~ f.urlEncode;
+
+                FileEntry fe = {name.endsWith('/'), name, 0, std.datetime.SysTime.init, showUrl, downloadUrl};
+                filesAppender.put(fe);
         }
 
-        void getArchive(Path filePath, Path internalPath,
+        auto internalParent = internalPath.pathSplitter.dropBack(1).buildPath;
+        auto localParent = urlPath;
+        if (internalPath.empty) {
+                localParent = urlPath.pathSplitter.dropBack(1).buildPath.absolutePath("/");
+        }
+
+        auto currentPath = buildPath(urlPath, internalPath);
+        auto parentUrl = schemeAndAuthority ~ localParent ~ "?action=show&path=" ~ internalParent.urlEncode;
+        auto files = filesAppender.data;
+        res.render!("template.dt", currentPath, parentUrl, files);
+}
+
+void showLocalDirectory(string filePath, string urlPath,
                         HTTPServerRequest req, HTTPServerResponse res) {
-                auto fileName = internalPath.empty ? filePath.head.toString() : internalPath.head.toString();
-                res.contentType = "application/octet";
-                res.headers["Content-Disposition"] = "attachment; filename=" ~ fileName ~ ".zip";
+        string schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
 
-                auto input = openFile(filePath.toString().stripRight('/'));
-                scope (exit) input.close();
+        Appender!(FileEntry[]) filesAppender;
+        foreach (fi; iterateDirectory(filePath)) {
+                auto name = fi.name;
+                auto url = schemeAndAuthority ~ chainPath(urlPath, fi.name).to!string();
+                auto downloadUrl = fi.name.endsWith(".zip") ? url : null;
 
-                auto filter = new PathFilter(internalPath);
-                auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
-                processor.process();
+                if (fi.isDirectory || fi.name.endsWith(".zip")) name ~= '/';
+                if (fi.name.endsWith(".zip")) url ~= "?action=show";
+
+                FileEntry fe = {fi.isDirectory, name, fi.size, fi.timeModified, url, downloadUrl};
+                filesAppender.put(fe);
         }
 
-        void listArchive(Path filePath, Path internalPath,
-                         HTTPServerRequest req, HTTPServerResponse res) {
-                auto fileName = internalPath.empty ? filePath.head.toString() : internalPath.head.toString();
-                res.contentType = "text/plain";
-                res.headers["Content-Disposition"] = "attachment; filename=" ~ fileName ~ ".list";
+        auto files = filesAppender.data;
+        string currentPath = urlPath;
+        string parentPath = urlPath == "/" ? null : Path(urlPath).parentPath.toString();
+        string parentUrl = urlPath ? schemeAndAuthority ~ parentPath : null;
+        res.render!("template.dt", currentPath, parentUrl, files);
+}
 
-                auto input = openFile(filePath.toString().stripRight('/'));
-                scope (exit) input.close();
+void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
+        auto documentRoot = "/home/vt/".asNormalizedPath.to!string();
+        auto urlPath = req.path.buildNormalizedPath.pathSplitter.stripLeft("..").buildPath.absolutePath("/");
+        auto filePath = chainPath(documentRoot, urlPath.stripLeft('/')).to!string;
 
-                auto filter = new DirectoryFilter(internalPath);
-                auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
-                auto fileList = processor.list();
-
-                foreach (file; fileList) {
-                        res.bodyWriter.write(file);
-                        res.bodyWriter.write("\0");
-                }
+        if (!existsFile(filePath)) {
+                return;
         }
 
-        void processArchive(Path documentRoot, Path localPath, Path internalPath,
-			    HTTPServerRequest req, HTTPServerResponse res) {
-                string schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
-                auto absolutePath = documentRoot ~ localPath;
-                absolutePath.endsWithSlash = false;
+        auto action = req.query.get("action");
 
-                if (internalPath.empty) internalPath.endsWithSlash = false;
-
-                auto input = openFile(absolutePath);
-                scope (exit) input.close();
-
-                auto filter = new DirectoryFilter(internalPath);
-                auto processor = new ArchiveProcessor(input, res.bodyWriter, filter);
-                auto fileList = processor.list();
-
-                Appender!(FileEntry[]) filesAppender;
-                foreach (f; fileList) {
-                        auto filePath = Path(f);
-                        auto name = filePath.head.toString() ~ (filePath.endsWithSlash ? "/" : null);
-                        auto url = schemeAndAuthority ~ '/' ~ (localPath ~ f).toString();
-                        auto downloadUrl = url.stripRight('/') ~ "?q=get";
-
-                        FileEntry fe = {filePath.endsWithSlash, name, 0, std.datetime.SysTime.init, url, downloadUrl};
-                        filesAppender.put(fe);
-                }
-
-                Path currentPath = Path("/") ~ localPath ~ internalPath;
-                string parentUrl = schemeAndAuthority ~ currentPath.parentPath.toString();
-                auto files = sortFiles(filesAppender.data, req);
-                res.render!("template.dt", currentPath, parentUrl, files, humanReadableInteger);
+        if (filePath.getFileInfo().isDirectory) {
+                showLocalDirectory(filePath, urlPath, req, res);
+        } else if (!action) {
+                sendFile(req, res, Path(filePath));
+        } else if (!filePath.endsWith(".zip")) {
+                throw new HTTPStatusException(400, "Unsupported file type");
         }
 
-	void processLocalPath(Path documentRoot, Path path,
-			      HTTPServerRequest req, HTTPServerResponse res) {
-		Path absolutePath = documentRoot ~ path;
-		string schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
+        switch (action) {
+        case "list": listArchive(filePath, req, res); break;
+        case "get": getArchive(filePath, req, res); break;
+        case "show": showArchive(filePath, urlPath, req, res); break;
+        default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
+        }
+}
 
-		Appender!(FileEntry[]) filesAppender;
-		foreach (fi; iterateDirectory(absolutePath)) {
-                        auto url = schemeAndAuthority ~ '/' ~ (path ~ fi.name).toString();
-                        auto downloadUrl = fi.name.endsWith(".zip") ? url : null;
+shared static this() {
+        try {
+                ushort port = 8080;
+                readOption!ushort("p", &port, "Port to listen on");
 
-			if (fi.isDirectory || fi.name.endsWith(".zip")) {
-                                fi.name ~= '/';
-                                url ~= "/";
-                        }
-
-			FileEntry fe = {fi.isDirectory, fi.name, fi.size, fi.timeModified, url, downloadUrl};
-			filesAppender.put(fe);
-		}
-
-		Path currentPath = Path("/") ~ path;
-		string parentUrl = path.empty ? null : schemeAndAuthority ~ currentPath.parentPath.toString();
-                auto files = sortFiles(filesAppender.data, req);
-		res.render!("template.dt", currentPath, parentUrl, files, humanReadableInteger);
-	}
-
-	void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
-		auto documentRoot = Path("/home/vt/");
-		auto path = splitPath(documentRoot, Path(req.path.stripLeft('/')));
-                auto q = req.query.get("q");
-
-                if (q) {
-                        if (q == "list") {
-                                listArchive(documentRoot ~ path.local, path.internal, req, res);
-                        } else if (q == "get") {
-                                getArchive(documentRoot ~ path.local, path.internal, req, res);
-                        }
-		} else if (path.local.endsWithSlash && !existsFile(documentRoot ~ path.local)
-                           && path.local.head.toString().endsWith(".zip")) {
-			processArchive(documentRoot, path.local, path.internal, req, res);
-                } else if (path.internal.empty) {
-			auto absolutePath = documentRoot ~ path.local;
-			if (absolutePath.getFileInfo().isDirectory) {
-				processLocalPath(documentRoot, path.local, req, res);
-			} else {
-				sendFile(req, res, absolutePath);
-			}
-
-                }
+                auto settings = new HTTPServerSettings;
+                settings.port = port;
+                settings.bindAddresses = ["::1", "127.0.0.1"];
+                listenHTTP(settings, &processRequest);
+        } catch (Exception e) {
+                stderr.writeln(e.msg ~ "\n");
         }
 }

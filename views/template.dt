@@ -75,7 +75,7 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                             - if (f.isDirectory)
                                 | -
                             - else
-                                - auto size = humanReadableInteger(f.size);
+                                - auto size = f.size;
                                 | #{size}
                         td
                             - if (f.timeModified.timezone)

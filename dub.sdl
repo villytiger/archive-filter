@@ -1,4 +1,4 @@
-name "archive-filter"
+name "web-archive-explorer"
 description "A simple vibe.d server application."
 copyright "Copyright © 2015, vt"
 authors "vt"
