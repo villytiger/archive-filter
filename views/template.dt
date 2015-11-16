@@ -1,0 +1,84 @@
+doctype strict
+// var t01_head1
+html(xmlns='http://www.w3.org/1999/xhtml')
+    head
+        meta(http-equiv='content-type', content='text/html; charset=utf-8')
+        meta(name='viewport', content='width=device-width')
+        style(type='text/css').
+            body,html {
+            background:#fff;
+            font-family:"Bitstream Vera Sans","Lucida Grande",
+            "Lucida Sans Unicode",Lucidux,Verdana,Lucida,sans-serif;
+            }
+            tr:nth-child(even) {
+            background:#f4f4f4;
+            }
+            th,td {
+            padding:0.1em 0.5em;
+            }
+            th {
+            text-align:left;
+            font-weight:bold;
+            background:#eee;
+            border-bottom:1px solid #aaa;
+            }
+            #list {
+            border:1px solid #aaa;
+            width:100%;
+            }
+            a {
+            color:#a33;
+            }
+            a:hover {
+            color:#e33;
+            }
+        // var t02_head2
+        title
+            | Index of #{currentPath}
+    // var t04_body1
+    body
+        h1
+            | Index of #{currentPath}
+        table#list(cellpadding='0.1em', cellspacing='0')
+            colgroup
+                col(width='0%')
+                col(width='55%')
+                col(width='20%')
+                col(width='25%')
+            thead
+                tr
+                    th
+                    th
+                        a(href='?sort-column=name&sort-order=ascending') File Name
+                        a(href='?sort-column=name&sort-order=descending')  ↓
+                    th
+                        a(href='?sort-column=size&sort-order=ascending') File Size
+                        a(href='?sort-column=size&sort-order=descending')  ↓
+                    th
+                        a(href='?sort-column=date&sort-order=ascending') Date
+                        a(href='?sort-column=date&sort-order=descending')  ↓
+            tbody
+                tr
+                    td
+                    td
+                        a(href='#{parentUrl}') Parent directory/
+                    td -
+                    td -
+                - foreach (f; files)
+                    tr
+                        td
+                            - if (f.downloadUrl)
+                                a(href='#{f.downloadUrl}') download
+                        td
+                            a(href='#{f.url}') #{f.name}
+                        td
+                            - if (f.isDirectory)
+                                | -
+                            - else
+                                - auto size = humanReadableInteger(f.size);
+                                | #{size}
+                        td
+                            - if (f.timeModified.timezone)
+                                | #{f.timeModified}
+                // var t07_list2
+        // var t08_foot1
