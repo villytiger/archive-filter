@@ -1,6 +1,7 @@
 import std.algorithm.mutation: strip, stripLeft, stripRight;
 import std.algorithm.sorting: multiSort;
 import std.bitmanip: littleEndianToNative, nativeToLittleEndian;
+import std.file: getcwd;
 import std.functional: binaryReverseArgs;
 import std.getopt;
 import std.path: absolutePath, asNormalizedPath, baseName, buildNormalizedPath, chainPath,
@@ -12,7 +13,7 @@ import std.stdio: stderr;
 import vibe.d;
 import vibe.stream.stdio: StderrStream, StdinStream, StdoutStream;
 
-import archive: ArchiveFilter, ArchiveProcessor, DirectoryFilter, GlobFilter, PathFilter;
+import archive: ArchiveFilter, ArchiveProcessor, DirectoryFilter, EglobFilter, PathFilter;
 
 struct FileEntry {
         bool isDirectory;
@@ -71,15 +72,12 @@ string humanReadableInteger(T)(T i) {
 }
 
 void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
-        string internalPath = req.query.get("path");
-        string globPattern = req.query.get("glob-pattern");
-
         auto input = openFile(filePath);
         scope (exit) input.close();
 
         ArchiveFilter filter;
-        if (globPattern) filter = new GlobFilter(globPattern);
-        else filter= new PathFilter(internalPath);
+        if (auto eglob = req.query.get("eglob")) filter = new EglobFilter(eglob);
+        else filter= new PathFilter(req.query.get("path"));
 
         auto processor = new ArchiveProcessor(input, filter);
 
@@ -102,14 +100,14 @@ void listArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res)
         auto fileList = processor.list();
 
         foreach (file; fileList) {
-                res.bodyWriter.write(file);
+                res.bodyWriter.write(file.baseName);
                 res.bodyWriter.write("\0");
         }
 }
 
 void showArchive(string filePath, string urlPath,
                  HTTPServerRequest req, HTTPServerResponse res) {
-        auto schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
+        auto urlPrefix = "http://" ~ req.host;
         auto internalPath = req.query.get("path");
 
         auto input = openFile(filePath);
@@ -138,23 +136,25 @@ void showArchive(string filePath, string urlPath,
         }
 
         auto currentPath = buildPath(urlPath, internalPath);
-        auto parentUrl = schemeAndAuthority ~ localParent ~ "?action=show&path=" ~ internalParent.urlEncode;
+        auto parentUrl = urlPrefix ~ localParent ~ "?action=show&path=" ~ internalParent.urlEncode;
         auto files = filesAppender.data;
         res.render!("template.dt", currentPath, parentUrl, files);
 }
 
 void showLocalDirectory(string filePath, string urlPath,
                         HTTPServerRequest req, HTTPServerResponse res) {
-        string schemeAndAuthority = "http://127.0.0.1:8080"; //res.headers["SchemeAndAuthority"];
+        string urlPrefix = "http://" ~ req.host;
 
         Appender!(FileEntry[]) filesAppender;
         foreach (fi; iterateDirectory(filePath)) {
                 auto name = fi.name;
-                auto url = schemeAndAuthority ~ chainPath(urlPath, fi.name).to!string();
+                auto url = urlPrefix ~ chainPath(urlPath, fi.name).to!string();
                 auto downloadUrl = fi.name.endsWith(".zip") ? url : null;
 
-                if (fi.isDirectory || fi.name.endsWith(".zip")) name ~= '/';
-                if (fi.name.endsWith(".zip")) url ~= "?action=show";
+                if (fi.isDirectory || fi.name.endsWith(".zip")) {
+                        name ~= '/';
+                        url ~= "?action=show";
+                }
 
                 FileEntry fe = {fi.isDirectory, name, fi.size, fi.timeModified, url, downloadUrl};
                 filesAppender.put(fe);
@@ -163,14 +163,13 @@ void showLocalDirectory(string filePath, string urlPath,
         auto files = filesAppender.data;
         string currentPath = urlPath;
         string parentPath = urlPath == "/" ? null : Path(urlPath).parentPath.toString();
-        string parentUrl = urlPath ? schemeAndAuthority ~ parentPath : null;
+        string parentUrl = urlPath ? urlPrefix ~ parentPath ~ "?action=show" : null;
         res.render!("template.dt", currentPath, parentUrl, files);
 }
 
 void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
-        auto documentRoot = "/home/vt/".asNormalizedPath.to!string();
         auto urlPath = req.path.buildNormalizedPath.pathSplitter.stripLeft("..").buildPath.absolutePath("/");
-        auto filePath = chainPath(documentRoot, urlPath.stripLeft('/')).to!string;
+        auto filePath = chainPath(gDocumentRoot, urlPath.stripLeft('/')).to!string;
 
         if (!existsFile(filePath)) {
                 return;
@@ -194,10 +193,17 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         }
 }
 
+shared string gDocumentRoot;
+
 shared static this() {
         try {
                 ushort port = 8080;
-                readOption!ushort("p", &port, "Port to listen on");
+                readOption!ushort("p", &port, "Port to listen on. Default is 8080.");
+
+                string documentRoot = getcwd();
+                readOption!string("r", &documentRoot,
+                                  "Document root. Default is working directory.");
+                gDocumentRoot = documentRoot.buildNormalizedPath;
 
                 auto settings = new HTTPServerSettings;
                 settings.port = port;

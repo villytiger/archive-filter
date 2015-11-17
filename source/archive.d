@@ -3,7 +3,8 @@ import std.array: Appender, empty;
 import std.bitmanip: littleEndianToNative, nativeToLittleEndian, peek;
 import std.conv: to;
 import std.path: globMatch;
-import std.string: endsWith, startsWith;
+import std.range.primitives: popFront, popFrontN;
+import std.string: endsWith, indexOf, startsWith;
 import std.system: Endian, endian;
 import std.typecons: scoped;
 
@@ -265,8 +266,6 @@ public:
                 output.write(mFileName);
 
                 foreach (headerId, field; mExtraFields) {
-                        import std.stdio;
-                        writefln("exfield %0.2x: %(%0.2x, %)", headerId, field);
                         output.write(headerId.nativeToLittleEndian);
                         output.write(field.length.to!ushort.nativeToLittleEndian);
                         output.write(field);
@@ -324,12 +323,13 @@ private:
 
 public:
         this(string path) {
-                mPath = path;
+                mPath = path.stripRight('/');
         }
 
         bool match(string path) {
-                if (path.startsWith(mPath)) return true;
-                else return false;
+                if (!path.startsWith(mPath)) return false;
+                else if (path.length == mPath.length) return true;
+                else return path[mPath.length] == '/';
         }
 }
 
@@ -344,6 +344,63 @@ public:
 
         bool match(string path) {
                 return globMatch(path, mPattern);
+        }
+}
+
+class EglobFilter: ArchiveFilter {
+private:
+        string mPattern;
+
+public:
+        this(string pattern) {
+                mPattern = pattern;
+        }
+
+        bool match(string path) {
+                string s = path;
+                for (string p = mPattern; !p.empty;) {
+                        if (p.startsWith("**")) {
+                                p.popFrontN(2);
+                                if (p.empty) return true;
+
+                                auto i = p.indexOf('*');
+                                if (i == -1) return s.endsWith(p);
+                                else if (i == 0) return false;
+
+                                auto j = s.indexOf(p[0..i]);
+                                if (j == -1) return false;
+
+                                p.popFrontN(i);
+                                s.popFrontN(j + i);
+                        } else if (p.startsWith("*")) {
+                                p.popFront();
+                                if (p.empty) return !s.canFind('/');
+
+                                auto i = p.indexOf('*');
+                                if (i == -1) {
+                                        if (!s.endsWith(p)) return false;
+                                        else if (s.length < p.length) return false;
+                                        else return !s[0..$-p.length].canFind('/');
+                                }
+
+                                auto j = s.indexOf(p[0..i]);
+                                if (j == -1) return false;
+                                else if (s[0..j].canFind('/')) return false;
+
+                                p.popFrontN(i);
+                                s.popFrontN(j + i);
+                        } else {
+                                auto i = p.indexOf('*');
+                                if (i == -1) return p == s;
+                                else if (s.length < i) return false;
+                                else if (s[0..i] != p[0..i]) return false;
+
+                                p.popFrontN(i);
+                                s.popFrontN(i);
+                        }
+                }
+
+                return s.empty;
         }
 }
 
