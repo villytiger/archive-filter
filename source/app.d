@@ -170,6 +170,20 @@ void showLocalDirectory(string filePath, string urlPath,
         res.render!("template.dt", currentPath, parentUrl, files);
 }
 
+void showBoobs(HTTPServerRequest req, HTTPServerResponse res) {
+        auto boobsJson = requestHTTP("http://api.oboobs.ru/noise/1").readJson();
+        auto boobsImg = "<html><head></head><body><img src='http://media.oboobs.ru/" ~ boobsJson[0].preview.to!string ~ "'></body>";
+        res.contentType = "text/html";
+        res.bodyWriter.write(boobsImg);
+}
+
+void showButts(HTTPServerRequest req, HTTPServerResponse res) {
+        auto buttsJson = requestHTTP("http://api.obutts.ru/noise/1").readJson();
+        auto buttsImg = "<html><head></head><body><img src='http://media.obutts.ru/" ~ buttsJson[0].preview.to!string ~ "'></body>";
+        res.contentType = "text/html";
+        res.bodyWriter.write(buttsImg);
+}
+
 void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         auto urlPath = req.path.buildNormalizedPath.pathSplitter.stripLeft("..").buildPath.absolutePath("/");
         auto filePath = chainPath(gDocumentRoot, urlPath.stripLeft('/')).to!string;
@@ -180,7 +194,11 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
 
         auto action = req.query.get("action");
 
-        if (filePath.getFileInfo().isDirectory) {
+        if (action && action == "show-boobs") {
+                showBoobs(req, res);
+        } else if (action && action == "show-butts") {
+                showButts(req, res);
+        } else if (filePath.getFileInfo().isDirectory) {
                 showLocalDirectory(filePath, urlPath, req, res);
         } else if (!action) {
                 sendFile(req, res, Path(filePath));
@@ -192,6 +210,8 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         case "list": listArchive(filePath, req, res); break;
         case "get": getArchive(filePath, req, res); break;
         case "show": showArchive(filePath, urlPath, req, res); break;
+        case "show-boobs": break;
+        case "show-butts": break;
         default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
         }
 }
