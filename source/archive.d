@@ -265,8 +265,6 @@ public:
                 output.write(mFileName);
 
                 foreach (headerId, field; mExtraFields) {
-                        import std.stdio;
-                        writefln("exfield %0.2x: %(%0.2x, %)", headerId, field);
                         output.write(headerId.nativeToLittleEndian);
                         output.write(field.length.to!ushort.nativeToLittleEndian);
                         output.write(field);
