@@ -76,6 +76,11 @@ void parseAll(T)(UngetInputStream input, void delegate(T) process) {
         }
 }
 
+enum CompressionMethod {
+        none = 0,
+        deflate = 8
+}
+
 struct LocalFile {
 private:
         LocalFileHeader mHeader = void;
@@ -124,8 +129,12 @@ public:
                 return field.compressedSize;
         }
 
-        @property SysTime modificationTime() {
+        @property SysTime modificationTime() const {
                 return fromDosDateTime(mHeader.modificationDate, mHeader.modificationTime);
+        }
+
+        @property CompressionMethod compressionMethod() const {
+                return mHeader.compressionMethod.to!CompressionMethod();
         }
 
         void skipData(InputStream input) {
@@ -612,7 +621,7 @@ private align(1) struct LocalFileHeader {
         uint signature;
         ushort ver;
         ushort flags;
-        ushort compression;
+        ushort compressionMethod;
         DosTime modificationTime;
         DosDate modificationDate;
         uint crc32;
@@ -629,7 +638,7 @@ private align(1) struct CentralDirectoryFileHeader {
         ushort ver;
         ushort versionNeeded;
         ushort flags;
-        ushort compression;
+        ushort compressionMethod;
         ushort modificationTime;
         ushort modificationDate;
         uint crc32;
