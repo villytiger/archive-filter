@@ -54,10 +54,17 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                 else return parseInt(v);
             }
 
+            function transformDate(v) {
+                return Date.parse(v);
+            }
+
             function cmp(a, b, column, order) {
                 if (column == "size") {
                     a = transformSize(a);
                     b = transformSize(b);
+                } else if (column == "date") {
+                    a = transformDate(a);
+                    b = transformDate(b);
                 }
 
                 if (order == 'descending') return a < b;
@@ -112,7 +119,7 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                 - foreach (f; files)
                     tr
                         - auto size = f.isDirectory ? "-" : f.size.to!string();
-                        - auto date = f.timeModified.timezone ? f.timeModified.to!string() : "-";
+                        - auto date = f.timeModified;
                         td
                             - if (f.downloadUrl)
                                 a(href='#{f.downloadUrl}') download
@@ -120,5 +127,5 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                             a(href='#{f.url}') #{f.name}
                         td(class='size', data-value='#{size}')
                             | #{size}
-                        td(class='date', data-value='#{date}')
-                            | #{date}
+                        td(class='date', data-value='#{date.toISOExtString()}')
+                            | #{date.to!string()}
