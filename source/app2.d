@@ -13,7 +13,15 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
         UngetInputStream, Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord,
         parse, parseAll;
 
-/*class ZipInputStream: InputStream {
+import core.atomic;
+import etc.c.zlib;
+import std.algorithm;
+import std.exception;
+import std.functional;
+import vibe.utils.array;
+import vibe.core.core;
+
+class ZipInputStream : InputStream {
 	import std.zlib;
 	private {
 		InputStream m_in;
@@ -25,15 +33,20 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
                 ulong m_bytesLeft;
 	}
 
-	this(InputStream src, ulong maxSize)
+	enum HeaderFormat {
+		gzip,
+		deflate,
+		automatic
+	}
+
+	this(InputStream src, ulong compressedSize)
 	{
-                m_maxSize = maxSize;
 		m_in = src;
-		if (m_in.empty) {
+                m_bytesLeft = compressedSize;
+		if (m_in.empty || m_bytesLeft == 0) {
 			m_finished = true;
 		} else {
-			int wndbits = -15;
-			zlibEnforce(inflateInit2(&m_zstream, wndbits));
+			zlibEnforce(inflateInit2(&m_zstream, -15));
 			readChunk();
 		}
 	}
@@ -42,7 +55,12 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
 
 	@property ulong leastSize()
 	{
-		return m_bytesLeft;
+		assert(!m_finished || m_bytesLeft == 0, "Input contains more data than expected.");
+		if (m_outbuffer.length > 0) return m_outbuffer.length;
+		if (m_finished) return 0;
+		readChunk();
+		assert(m_outbuffer.length || m_finished);
+		return m_outbuffer.length;
 	}
 
 	@property bool dataAvailableForRead()
@@ -62,7 +80,7 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
 			dst = dst[len .. $];
 
 			if (!m_outbuffer.length && !m_finished) readChunk();
-			enforce(dst.length == 0 || !m_finished, "Reading past end of zlib stream.");
+			enforce(dst.length == 0 || m_outbuffer.length || !m_finished, "Reading past end of zlib stream.");
 		}
 	}
 
@@ -77,8 +95,9 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
 
 		while (!m_outbuffer.length) {
 			if (m_zstream.avail_in == 0) {
-				auto clen = min(m_inbuffer.length, m_in.leastSize);
+				auto clen = min(m_inbuffer.length, m_bytesLeft);
 				m_in.read(m_inbuffer[0 .. clen]);
+                                m_bytesLeft -= clen;
 				m_zstream.next_in = m_inbuffer.ptr;
 				m_zstream.avail_in = cast(uint)clen;
 			}
@@ -94,7 +113,7 @@ import zip: CentralDirectoryFile, CompressionMethod, EndOfCentralDirectoryRecord
 
 			if (ret == Z_STREAM_END) {
 				m_finished = true;
-				assert(m_in.empty, "Input expected to be empty at this point.");
+				assert(m_bytesLeft == 0, "Input expected to be empty at this point.");
 				return;
 			}
 		}
@@ -114,19 +133,35 @@ private int zlibEnforce(int result)
 		case Z_BUF_ERROR: throw new Exception("zlib buffer error");
 		case Z_VERSION_ERROR: throw new Exception("zlib version error");
 	}
-        }*/
-
-void decompress(InputStream input, string path, ulong compressedSize, ulong originalSize) {
-        auto output = openFile(path, FileMode.createTrunc);
-        scope (exit) output.close();
-        import std.zlib;
-        auto buf = new ubyte[compressedSize];
-        input.read(buf);
-        auto data = cast(ubyte[])uncompress(buf, originalSize, -15);
-        output.write(data);
 }
 
-void unpackArchive(InputStream inputStream) {
+shared int taskCount = 0;
+
+void decompress(string archivePath, ulong position, ulong compressedSize,
+                CompressionMethod compressionMethod, string outputPath, ulong originalSize) {
+        import std.stdio;
+        auto input = openFile(archivePath);
+        scope (exit) input.close();
+        input.seek(position);
+
+        InputStream wrappedInput;
+        final switch (compressionMethod) {
+        case CompressionMethod.none: wrappedInput = input; break;
+        case CompressionMethod.deflate: wrappedInput = new ZipInputStream(input, compressedSize); break;
+        }
+
+        auto output = openFile(outputPath, FileMode.createTrunc);
+        scope (exit) output.close();
+
+        output.write(wrappedInput, originalSize);
+
+        atomicOp!("-=")(taskCount, 1);
+}
+
+void unpackArchive(string archivePath) {
+        auto inputStream = openFile(archivePath);
+        scope (exit) inputStream.close();
+
         auto input = new UngetInputStream(inputStream);
 
         parseAll!LocalFile(input, delegate(LocalFile file) {
@@ -138,32 +173,42 @@ void unpackArchive(InputStream inputStream) {
                                 return;
                         }
 
+                        while (atomicLoad(taskCount) > 12) {
+                        }
+
+                        runWorkerTaskH(&decompress, archivePath, input.count(), file.compressedSize,
+                                      file.compressionMethod, file.name, file.originalSize);
+                        input.skip(file.compressedSize);
+
+                        atomicOp!("+=")(taskCount, 1);
+
                         /*InputStream wrappedInput;
                         final switch (file.compressionMethod) {
                         case CompressionMethod.none: wrappedInput = input; break;
-                        case CompressionMethod.deflate: wrappedInput = new DeflateInputStream(input); break;
+                        case CompressionMethod.deflate: wrappedInput = new ZipInputStream(input, file.compressedSize); break;
                         }
 
-                        import std.stdio;
-                        writeln(file.name);
-                        writeln(file.originalSize);
-                        output.write(wrappedInput, file.originalSize);
-                        file.writeData(wrappedInput, output);*/
+                        auto output = openFile(file.name, FileMode.createTrunc);
+                        scope (exit) output.close();*/
 
-                        if (file.compressionMethod == CompressionMethod.none) {
+                        //output.write(wrappedInput);
+                        //file.writeOriginalData(wrappedInput, output);
+
+                        /*if (file.compressionMethod == CompressionMethod.none) {
                                 auto output = openFile(file.name, FileMode.createTrunc);
                                 scope (exit) output.close();
                                 file.writeData(input, output);
                         } else {
                                 import vibe.core.core;
                                 runWorkerTask(&decompress, input, file.name, file.compressedSize, file.originalSize);
-                        }
+                                }*/
                 });
+
+        processEvents();
+        exitEventLoop();
 }
 
 void main(string[] args) {
-        auto input = openFile(args[1]);
-        scope (exit) input.close();
-
-        unpackArchive(input);
+        runTask(toDelegate(&unpackArchive), args[1]);
+        runEventLoop();
 }

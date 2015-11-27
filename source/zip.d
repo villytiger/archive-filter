@@ -58,6 +58,28 @@ public:
 
                 mCount += dst.length;
 	}
+
+        void skip(ulong bytes) {
+                auto count = bytes;
+
+                auto len = min(mData.length, bytes);
+                mData.length -= len;
+                bytes -= len;
+
+                auto s = cast(RandomAccessStream)mStream;
+                if (s) {
+                        s.seek(s.tell() + bytes);
+                } else {
+                        ubyte[4096] b;
+                        while (bytes) {
+                                auto l = min(b.length, bytes);
+                                mStream.read(b[0..l]);
+                                bytes -= l;
+                        }
+                }
+
+                mCount += count;
+        }
 }
 
 bool parse(T)(UngetInputStream input, void delegate(T) process) {
@@ -148,7 +170,12 @@ public:
                 mExtraFields.write(output);
         }
 
-        void writeData(InputStream input, OutputStream output) {
+        void writeOriginalData(InputStream input, OutputStream output) {
+                auto s = this.originalSize;
+                if (s) output.write(input, s);
+        }
+
+        void writeCompressedData(InputStream input, OutputStream output) {
                 auto s = this.compressedSize;
                 if (s) output.write(input, s);
         }

@@ -25,7 +25,7 @@ void sieveArchive(InputStream inputStream, OutputStream outputStream, in Archive
                         offsets[name] = output.bytesWritten;
 
                         file.write(output);
-                        file.writeData(input, output);
+                        file.writeCompressedData(input, output);
                 });
 
         ulong centralDirectoryOffset = output.bytesWritten;
