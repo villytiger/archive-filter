@@ -1,5 +1,6 @@
-import std.algorithm: canFind, stripRight;
-import std.array: Appender, empty;
+import std.algorithm: canFind, setDifference, stripRight;
+import std.array: Appender, array, empty;
+import std.container.rbtree: RedBlackTree, redBlackTree;
 import std.path: globMatch;
 import std.range.primitives: popFront, popFrontN;
 import std.string: endsWith, indexOf, startsWith;
@@ -10,7 +11,7 @@ import vibe.stream.counting: CountingOutputStream;
 import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, UngetInputStream,
         Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord, parse, parseAll;
 
-void sieveArchive(InputStream inputStream, OutputStream outputStream, in ArchiveFilter filter) {
+void sieveArchive(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter) {
         auto input = new UngetInputStream(inputStream);
         auto output = new CountingOutputStream(outputStream);
 
@@ -63,7 +64,7 @@ void sieveArchive(InputStream inputStream, OutputStream outputStream, in Archive
                 });
 }
 
-string[] listArchive(InputStream inputStream, in ArchiveFilter filter) {
+string[] listArchive(InputStream inputStream, ArchiveFilter filter) {
         auto input = new UngetInputStream(inputStream);
         Appender!(string[]) result;
 
@@ -77,7 +78,7 @@ string[] listArchive(InputStream inputStream, in ArchiveFilter filter) {
 }
 
 interface ArchiveFilter {
-        bool match(string path) const;
+        bool match(string path);
 }
 
 class PathFilter: ArchiveFilter {
@@ -89,7 +90,7 @@ public:
                 mPath = path.stripRight('/');
         }
 
-        bool match(string path) const {
+        bool match(string path) {
                 if (!path.startsWith(mPath)) return false;
                 else if (path.length == mPath.length) return true;
                 else return path[mPath.length] == '/';
@@ -105,7 +106,7 @@ public:
                 mPattern = pattern;
         }
 
-        bool match(string path) const {
+        bool match(string path) {
                 return globMatch(path, mPattern);
         }
 }
@@ -119,7 +120,7 @@ public:
                 mPattern = pattern;
         }
 
-        bool match(string path) const {
+        bool match(string path) {
                 string s = path;
                 for (string p = mPattern; !p.empty;) {
                         if (p.startsWith("**")) {
@@ -167,8 +168,8 @@ public:
         }
 }
 
-class DirectoryFilter: ArchiveFilter {
-private:
+class BaseDirectoryFilter: ArchiveFilter {
+protected:
         string mPath;
 
 public:
@@ -177,10 +178,50 @@ public:
                 if (!path.empty && !path.endsWith('/')) mPath ~= '/';
         }
 
-        bool match(string path) const {
-                if (!path.startsWith(mPath)) return false;
-                else if (path[mPath.length..$].stripRight('/').canFind('/')) return false;
-                else if (path.length == mPath.length) return false;
+        bool match(string path) {
+                if (path[mPath.length..$].stripRight('/').canFind('/')) return false;
                 else return true;
+        }
+}
+
+class DirectoryFilter: BaseDirectoryFilter {
+public:
+        this(string path) {
+                super(path);
+        }
+
+        override bool match(string path) {
+                if (!path.startsWith(mPath) || path.length == mPath.length) return false;
+                else return super.match(path);
+        }
+}
+
+class AddDirectoryFilter: BaseDirectoryFilter {
+private:
+        RedBlackTree!string mActualContent;
+        RedBlackTree!string mAdditionalContent;
+
+public:
+        this(string path) {
+                super(path);
+                mActualContent = new RedBlackTree!string();
+                mAdditionalContent = new RedBlackTree!string();
+        }
+
+        override bool match(string path) {
+                if (!path.startsWith(mPath) || path.length == mPath.length) {
+                        return false;
+                } else if (super.match(path)) {
+                        mActualContent.insert!string(path);
+                        return true;
+                } else {
+                        auto i = path.indexOf('/', mPath.length);
+                        mAdditionalContent.insert!string(path[0..i+1]);
+                        return false;
+                }
+        }
+
+        @property string[] additionalContent() const {
+                return cast(string[])array(setDifference(mAdditionalContent[], mActualContent[]));
         }
 }

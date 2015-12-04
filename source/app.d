@@ -1,7 +1,7 @@
 import std.algorithm.mutation: stripLeft;
 import std.array: Appender, empty;
 import std.conv: to;
-import std.datetime: SysTime;
+import std.datetime: SysTime, UTC;
 import std.file: getcwd;
 import std.path: absolutePath, baseName, buildNormalizedPath, buildPath, chainPath, pathSplitter;
 import std.range: dropBack;
@@ -15,7 +15,7 @@ import vibe.http.server: HTTPServerRequest, HTTPServerResponse, HTTPServerSettin
 import vibe.inet.path: Path;
 import vibe.textfilter.urlencode: urlEncode;
 
-import archive: ArchiveFilter, DirectoryFilter, EglobFilter, PathFilter, sieveArchive;
+import archive: ArchiveFilter, AddDirectoryFilter, EglobFilter, PathFilter, sieveArchive;
 
 import zip: LocalFile, UngetInputStream, parseAll;
 
@@ -43,7 +43,7 @@ void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) 
 
 void listArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
         string internalPath = req.query.get("path");
-        auto filter = new DirectoryFilter(internalPath);
+        auto filter = new AddDirectoryFilter(internalPath);
 
         auto inputStream = openFile(filePath);
         scope (exit) inputStream.close();
@@ -60,6 +60,11 @@ void listArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res)
                                 res.bodyWriter.write("\0");
                         }
                 });
+
+        foreach (f; filter.additionalContent) {
+                res.bodyWriter.write(f.baseName);
+                res.bodyWriter.write("\0");
+        }
 }
 
 void showArchive(string filePath, string urlPath,
@@ -67,7 +72,7 @@ void showArchive(string filePath, string urlPath,
         auto urlPrefix = "http://" ~ req.host;
 
         auto internalPath = req.query.get("path");
-        auto filter = new DirectoryFilter(internalPath);
+        auto filter = new AddDirectoryFilter(internalPath);
 
         auto inputStream = openFile(filePath);
         scope (exit) inputStream.close();
@@ -90,6 +95,12 @@ void showArchive(string filePath, string urlPath,
                                         file.modificationTime, showUrl, downloadUrl};
                         filesAppender.put(fe);
                 });
+
+        foreach (f; filter.additionalContent) {
+                FileEntry fe = {f.endsWith('/'), f.baseName, 0, SysTime.fromUnixTime(0, UTC()),
+                                urlPath ~ "?action=show&path=" ~ f.urlEncode};
+                filesAppender.put(fe);
+        }
 
         auto internalParent = internalPath.pathSplitter.dropBack(1).buildPath;
         auto localParent = urlPath;
