@@ -47,7 +47,7 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                     }
                     sizes[i].innerHTML = v;
                 }
-            }
+            };
 
             function transformSize(v, order) {
                 if (v == "-") return 0;
@@ -67,8 +67,12 @@ html(xmlns='http://www.w3.org/1999/xhtml')
                     b = transformDate(b);
                 }
 
-                if (order == 'descending') return a < b;
-                else return b < a;
+                var r = 0;
+                if (a < b) r = 1;
+                else if (b < a) r = -1;
+
+                if (order == 'descending') return r;
+                else return -r;
             }
 
             function sort(column, order) {
