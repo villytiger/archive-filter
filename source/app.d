@@ -14,6 +14,7 @@ import vibe.http.fileserver: sendFile;
 import vibe.http.server: HTTPServerRequest, HTTPServerResponse, HTTPServerSettings, listenHTTP, render;
 import vibe.inet.path: Path;
 import vibe.textfilter.urlencode: urlEncode;
+import vibe.core.core: runApplication;
 
 import archive: ArchiveFilter, AddDirectoryFilter, EglobFilter, PathFilter, sieveArchive;
 
@@ -181,8 +182,11 @@ shared static this() {
                 auto settings = new HTTPServerSettings;
                 settings.port = port;
                 settings.bindAddresses = ["::1", "127.0.0.1"];
-                listenHTTP(settings, &processRequest);
-        } catch (Exception e) {
+                auto listner = listenHTTP(settings, &processRequest);
+       		scope(exit) listner.stopListening();
+		
+		runApplication();
+	} catch (Exception e) {
                 import std.stdio: stderr;
                 stderr.writeln(e.msg ~ "\n");
         }
