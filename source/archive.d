@@ -5,15 +5,17 @@ import std.path: globMatch;
 import std.range.primitives: popFront, popFrontN;
 import std.string: endsWith, indexOf, startsWith;
 
-import vibe.core.stream: InputStream, OutputStream;
-import vibe.stream.counting: CountingOutputStream;
+import vibe.core.stream: isInputStream, isOutputStream;
+import vibe.stream.counting: createCountingOutputStream;
 
 import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, UngetInputStream,
         Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord, parse, parseAll;
 
-void sieveArchive(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter) {
-        auto input = new UngetInputStream(inputStream);
-        auto output = new CountingOutputStream(outputStream);
+void sieveArchive(InputStream, OutputStream)(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter)
+		if (isInputStream!InputStream && isOutputStream!OutputStream)
+{
+        auto input = new UngetInputStream!InputStream(inputStream);
+        auto output = createCountingOutputStream(outputStream);
 
         ulong[string] offsets;
         parseAll!LocalFile(input, delegate(LocalFile file) {

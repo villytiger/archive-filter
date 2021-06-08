@@ -8,11 +8,11 @@ import std.range: dropBack;
 import std.string: endsWith;
 
 import vibe.core.args: readOption;
-import vibe.core.file: existsFile, getFileInfo, iterateDirectory, openFile;
+import vibe.core.file: FileStream, existsFile, getFileInfo, iterateDirectory, openFile;
 import vibe.http.common: HTTPStatusException;
 import vibe.http.fileserver: sendFile;
 import vibe.http.server: HTTPServerRequest, HTTPServerResponse, HTTPServerSettings, listenHTTP, render;
-import vibe.inet.path: Path;
+import vibe.core.path: NativePath;
 import vibe.textfilter.urlencode: urlEncode;
 
 import archive: ArchiveFilter, AddDirectoryFilter, EglobFilter, PathFilter, sieveArchive;
@@ -50,7 +50,7 @@ void showArchive(string filePath, string urlPath,
 
         auto inputStream = openFile(filePath);
         scope (exit) inputStream.close();
-        auto input = new UngetInputStream(inputStream);
+        auto input = new UngetInputStream!FileStream(inputStream);
 
         Appender!(FileEntry[]) filesAppender;
         parseAll!LocalFile(input, delegate(LocalFile file) {
@@ -109,7 +109,7 @@ void showLocalDirectory(string filePath, string urlPath,
 
         auto files = filesAppender.data;
         string currentPath = urlPath;
-        string parentPath = urlPath == "/" ? null : Path(urlPath).parentPath.toString();
+        string parentPath = urlPath == "/" ? null : NativePath(urlPath).parentPath.toString();
         string parentUrl = urlPath ? urlPrefix ~ parentPath ~ "?action=show" : null;
         res.render!("template.dt", currentPath, parentUrl, files);
 }
@@ -127,7 +127,7 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         if (filePath.getFileInfo().isDirectory) {
                 showLocalDirectory(filePath, urlPath, req, res);
         } else if (!action) {
-                sendFile(req, res, Path(filePath));
+                sendFile(req, res, NativePath(filePath));
         } else if (!filePath.endsWith(".zip")) {
                 throw new HTTPStatusException(400, "Unsupported file type");
         }
