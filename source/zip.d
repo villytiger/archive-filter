@@ -64,6 +64,12 @@ public:
 	@safe void read(scope ubyte[] dst) { auto r = read(dst, IOMode.all); assert(r == dst.length); }
 }
 
+UngetInputStream!InputStream createUngetInputStream(InputStream)(InputStream input)
+	if (isInputStream!InputStream)
+{
+	return new UngetInputStream!InputStream(input);
+}
+
 bool parse(T, UngetInputStream)(UngetInputStream input, void delegate(T) process) {
         auto signature = input.get!uint();
         input.unget(signature.nativeToLittleEndian);
@@ -192,7 +198,7 @@ unittest {
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0x50, 0x80,
                 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createUngetInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!LocalFile(input, delegate(LocalFile file) {
@@ -326,7 +332,7 @@ unittest {
                 0x00,
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createUngetInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!CentralDirectoryFile(input, delegate(CentralDirectoryFile file) {
@@ -406,7 +412,7 @@ unittest {
                 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // offset of start of central directory with respect to the starting disk number
                 0xa2, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createUngetInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryRecord(input, delegate(Zip64EndOfCentralDirectoryRecord record) {
@@ -453,7 +459,7 @@ unittest {
                 0xf8, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // total number of disks
                 0x01, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createUngetInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryLocator(input, delegate(Zip64EndOfCentralDirectoryLocator record) {
@@ -543,7 +549,7 @@ unittest {
                 0xa2, 0x80, 0x4f, 0x00,
                 // .ZIP file comment length
                 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createUngetInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!EndOfCentralDirectoryRecord(input, delegate(EndOfCentralDirectoryRecord record) {

@@ -8,13 +8,13 @@ import std.string: endsWith, indexOf, startsWith;
 import vibe.core.stream: isInputStream, isOutputStream;
 import vibe.stream.counting: createCountingOutputStream;
 
-import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, UngetInputStream,
+import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, createUngetInputStream,
         Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord, parse, parseAll;
 
 void sieveArchive(InputStream, OutputStream)(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter)
 		if (isInputStream!InputStream && isOutputStream!OutputStream)
 {
-        auto input = new UngetInputStream!InputStream(inputStream);
+        auto input = createUngetInputStream(inputStream);
         auto output = createCountingOutputStream(outputStream);
 
         ulong[string] offsets;
