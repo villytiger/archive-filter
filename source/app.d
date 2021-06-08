@@ -41,32 +41,6 @@ void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) 
         sieveArchive(input, res.bodyWriter, filter);
 }
 
-void listArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
-        string internalPath = req.query.get("path");
-        auto filter = new AddDirectoryFilter(internalPath);
-
-        auto inputStream = openFile(filePath);
-        scope (exit) inputStream.close();
-        auto input = new UngetInputStream(inputStream);
-
-        res.contentType = "text/plain";
-        res.headers["Content-Disposition"] = "attachment; filename=" ~ filePath.baseName;
-
-        parseAll!LocalFile(input, delegate(LocalFile file) {
-                        file.skipData(input);
-                        auto name = file.name;
-                        if (filter.match(name)) {
-                                res.bodyWriter.write(name.baseName);
-                                res.bodyWriter.write("\0");
-                        }
-                });
-
-        foreach (f; filter.additionalContent) {
-                res.bodyWriter.write(f.baseName);
-                res.bodyWriter.write("\0");
-        }
-}
-
 void showArchive(string filePath, string urlPath,
                  HTTPServerRequest req, HTTPServerResponse res) {
         auto urlPrefix = "http://" ~ req.host;
@@ -159,7 +133,6 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         }
 
         switch (action) {
-        case "list": listArchive(filePath, req, res); break;
         case "get": getArchive(filePath, req, res); break;
         case "show": showArchive(filePath, urlPath, req, res); break;
         default: throw new HTTPStatusException(400, "Unkown action: " ~ action);

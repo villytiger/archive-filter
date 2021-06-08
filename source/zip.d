@@ -17,20 +17,14 @@ class UngetInputStream: InputStream {
 private:
 	InputStream mStream;
 	ubyte[] mData;
-        ulong mCount = 0;
 
 public:
 	this(InputStream stream) {
 		mStream = stream;
 	}
 
-        @property inout(InputStream) sourceStream() inout { return mStream; }
-
-        @property ulong count() const { return mCount; }
-
         void unget(ubyte[] data) {
 		mData ~= data;
-                mCount -= data.length;
 	}
 
 	override @property bool empty() { return mData.empty() && mStream.empty(); }
@@ -56,7 +50,6 @@ public:
 			mStream.read(dst);
 		}
 
-                mCount += dst.length;
 	}
 }
 

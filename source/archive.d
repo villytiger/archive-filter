@@ -64,19 +64,6 @@ void sieveArchive(InputStream inputStream, OutputStream outputStream, ArchiveFil
                 });
 }
 
-string[] listArchive(InputStream inputStream, ArchiveFilter filter) {
-        auto input = new UngetInputStream(inputStream);
-        Appender!(string[]) result;
-
-        parseAll!LocalFile(input, delegate(LocalFile file) {
-                        file.skipData(input);
-                        auto name = file.name;
-                        if (filter.match(name)) result.put(name);
-                });
-
-        return result.data;
-}
-
 interface ArchiveFilter {
         bool match(string path);
 }
