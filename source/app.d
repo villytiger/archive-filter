@@ -30,7 +30,13 @@ struct FileEntry {
 }
 
 void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
-        auto input = openFile(filePath);
+        if(req.query.get("path").empty()) {
+		sendFile(req, res, NativePath(filePath));
+		return;
+	}
+
+	
+	auto input = openFile(filePath);
         scope (exit) input.close();
 
         ArchiveFilter filter;
@@ -152,19 +158,24 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         auto action = req.query.get("action");
 
         if (filePath.getFileInfo().isDirectory) {
-                showLocalDirectory(filePath, urlPath, req, res);
-        } else if (!action) {
-                sendFile(req, res, Path(filePath));
-        } else if (!filePath.endsWith(".zip")) {
+		switch (action) {
+		case null:
+		case "show": showLocalDirectory(filePath, urlPath, req, res); break;
+		default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
+		}
+	} else if (filePath.endsWith(".zip")) {
+        	switch (action) {
+		case null:
+        	case "get": getArchive(filePath, req, res); break;
+        	case "show": showArchive(filePath, urlPath, req, res); break;
+        	default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
+        	}
+	} else if (filePath.getFileInfo().isFile)
+	{
+                sendFile(req, res, NativePath(filePath));
+	} else {
                 throw new HTTPStatusException(400, "Unsupported file type");
-        }
-
-        switch (action) {
-        case "list": listArchive(filePath, req, res); break;
-        case "get": getArchive(filePath, req, res); break;
-        case "show": showArchive(filePath, urlPath, req, res); break;
-        default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
-        }
+	}
 }
 
 shared string gDocumentRoot;
