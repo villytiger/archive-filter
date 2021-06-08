@@ -5,16 +5,16 @@ import std.path: globMatch;
 import std.range.primitives: popFront, popFrontN;
 import std.string: endsWith, indexOf, startsWith;
 
-import vibe.core.stream: isInputStream, isOutputStream;
+import vibe.core.stream: isRandomAccessStream, isOutputStream;
 import vibe.stream.counting: createCountingOutputStream;
 
-import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, createUngetInputStream,
+import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, createBufferedInputStream,
         Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord, parse, parseAll;
 
-void sieveArchive(InputStream, OutputStream)(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter)
-		if (isInputStream!InputStream && isOutputStream!OutputStream)
+void sieveArchive(InputRandomAccessStream, OutputStream)(InputRandomAccessStream inputStream, OutputStream outputStream, ArchiveFilter filter)
+		if (isRandomAccessStream!InputRandomAccessStream && isOutputStream!OutputStream)
 {
-        auto input = createUngetInputStream(inputStream);
+        auto input = createBufferedInputStream(inputStream);
         auto output = createCountingOutputStream(outputStream);
 
         ulong[string] offsets;

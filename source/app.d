@@ -17,7 +17,7 @@ import vibe.textfilter.urlencode: urlEncode;
 
 import archive: ArchiveFilter, AddDirectoryFilter, EglobFilter, PathFilter, sieveArchive;
 
-import zip: LocalFile, createUngetInputStream, parseAll;
+import zip: LocalFile, createBufferedInputStream, parseAll;
 
 struct FileEntry {
         bool isDirectory;
@@ -50,7 +50,7 @@ void showArchive(string filePath, string urlPath,
 
         auto inputStream = openFile(filePath);
         scope (exit) inputStream.close();
-        auto input = createUngetInputStream!FileStream(inputStream);
+        auto input = createBufferedInputStream!FileStream(inputStream);
 
         Appender!(FileEntry[]) filesAppender;
         parseAll!LocalFile(input, delegate(LocalFile file) {

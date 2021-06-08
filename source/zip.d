@@ -5,7 +5,7 @@ import std.conv: to;
 import std.datetime: DateTime, SysTime;
 import std.system: Endian, endian;
 
-import vibe.core.stream: isInputStream, isOutputStream, RandomAccessStream, pipe;
+import vibe.core.stream: isInputStream, isOutputStream, isRandomAccessStream, RandomAccessStream, blocking, pipe;
 
 import eventcore.driver : IOMode;
 
@@ -15,71 +15,106 @@ version (unittest) {
         import dunit.toolkit;
 }
 
-class UngetInputStream(InputStream)
-	if (isInputStream!InputStream)
+class BufferedInputStream(InputRandomAccessStream) : RandomAccessStream
+	if (isRandomAccessStream!InputRandomAccessStream)
 {
 private:
-	InputStream mStream;
-	ubyte[] mData;
+	InputRandomAccessStream mStream;
+	ubyte[] mBuffer;
 
 public:
-	this(InputStream stream) {
+	this(InputRandomAccessStream stream) {
 		mStream = stream;
+		mBuffer.length = 0;
 	}
 
-        void unget(ubyte[] data) {
-		mData ~= data;
+@safe:
+
+        void putBack(ubyte[] data) {
+		mBuffer = data ~ mBuffer;
 	}
 
-	@property @safe bool empty() { return mData.empty() && mStream.empty(); }
+	@property bool readable() const nothrow { return mStream.readable; }
+	
+	@property ulong size() const nothrow { return mStream.size; }
+	
+	@property bool writable() const nothrow { return false; }
 
-	@property @safe ulong leastSize() { return mData.length + mStream.leastSize(); }
+	@property @blocking bool empty() { return mBuffer.empty() && mStream.empty(); }
 
-	@property @safe bool dataAvailableForRead() { return !mData.empty || mStream.dataAvailableForRead(); }
+	@property @blocking ulong leastSize() { return mBuffer.length + mStream.leastSize(); }
 
-	@safe const(ubyte)[] peek() { return mStream.peek(); }
+	@property bool dataAvailableForRead() { return !mBuffer.empty || mStream.dataAvailableForRead(); }
 
-	@safe ulong read(scope ubyte[] dst, IOMode mode) {
+	@blocking void seek(ulong offset) {
+		mBuffer.length = 0;
+		mStream.seek(offset);
+	}
+
+	ulong tell() nothrow {
+		return mStream.tell() - mBuffer.length;
+	}
+
+
+	@blocking void finalize() {}
+	
+	@blocking void flush() {}
+	
+	const(ubyte)[] peek() { return mBuffer ~ mStream.peek(); }
+
+	void fullBuffer(ulong size) {
+		size = min(size, mStream.leastSize());
+		if (mBuffer.length >= size)
+			return;
+
+		auto oldLength = mBuffer.length;
+		mBuffer.length = size;
+		mStream.read(mBuffer[oldLength..size], IOMode.all);
+	}
+
+	@blocking size_t write(in ubyte[] bytes, IOMode mode) { return 0; };
+ 
+	@blocking ulong read(scope ubyte[] dst, IOMode mode) {
 		ulong ret = 0;
 
-		if (!mData.empty) {
-			if (mData.length <= dst.length) {
-				size_t l = mData.length;
-				dst[0..l] = mData[];
-				ret = l;
-				mData.length = 0;
-				ret += mStream.read(dst[l..$], mode);
-			} else {
-				dst = mData[0..dst.length];
-				ret = dst.length;
-				mData = mData[dst.length..$];
-			}
+		if (mBuffer.length < 2048)
+			fullBuffer(4096);
+
+		if (mBuffer.length <= dst.length) {
+			ulong l = mBuffer.length;
+			dst[0..mBuffer.length] = mBuffer[];
+			ret = mBuffer.length;
+			mBuffer.length = 0;
+			ret += mStream.read(dst[l..$], mode);
+
 		} else {
-			ret = mStream.read(dst, mode);
+			dst[0..dst.length] = mBuffer[0..dst.length];
+			ret = dst.length;
+			mBuffer = mBuffer[dst.length..$];
 		}
 
 		return ret;
 	}
 
-	@safe void read(scope ubyte[] dst) { auto r = read(dst, IOMode.all); assert(r == dst.length); }
+	alias read = RandomAccessStream.read;
 }
 
-UngetInputStream!InputStream createUngetInputStream(InputStream)(InputStream input)
-	if (isInputStream!InputStream)
+BufferedInputStream!RandomAccessStream createBufferedInputStream(RandomAccessStream)(RandomAccessStream input)
+	if (isRandomAccessStream!RandomAccessStream)
 {
-	return new UngetInputStream!InputStream(input);
+	return new BufferedInputStream!RandomAccessStream(input);
 }
 
-bool parse(T, UngetInputStream)(UngetInputStream input, void delegate(T) process) {
+bool parse(T, BufferedInputStream)(BufferedInputStream input, void delegate(T) process) {
         auto signature = input.get!uint();
-        input.unget(signature.nativeToLittleEndian);
+        input.putBack(signature.nativeToLittleEndian);
         if (signature != T.mHeader.MAGIC) return false;
 
         process(T(input));
         return true;
 }
 
-void parseAll(T, UngetInputStream)(UngetInputStream input, void delegate(T) process) {
+void parseAll(T, BufferedInputStream)(BufferedInputStream input, void delegate(T) process) {
         while (!input.empty) {
                 auto r = parse!T(input, process);
                 if (!r) return;
@@ -198,7 +233,7 @@ unittest {
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0x50, 0x80,
                 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = createUngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!LocalFile(input, delegate(LocalFile file) {
@@ -332,7 +367,7 @@ unittest {
                 0x00,
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00];
-        auto input = createUngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!CentralDirectoryFile(input, delegate(CentralDirectoryFile file) {
@@ -412,7 +447,7 @@ unittest {
                 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // offset of start of central directory with respect to the starting disk number
                 0xa2, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = createUngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryRecord(input, delegate(Zip64EndOfCentralDirectoryRecord record) {
@@ -459,7 +494,7 @@ unittest {
                 0xf8, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // total number of disks
                 0x01, 0x00, 0x00, 0x00];
-        auto input = createUngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryLocator(input, delegate(Zip64EndOfCentralDirectoryLocator record) {
@@ -549,7 +584,7 @@ unittest {
                 0xa2, 0x80, 0x4f, 0x00,
                 // .ZIP file comment length
                 0x00, 0x00];
-        auto input = createUngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!EndOfCentralDirectoryRecord(input, delegate(EndOfCentralDirectoryRecord record) {
