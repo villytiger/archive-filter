@@ -1,9 +1,9 @@
 name "web-archive-explorer"
 description "A simple vibe.d server application."
-copyright "Copyright © 2015, vt"
+copyright "Copyright © 2021, vt"
 authors "vt"
-dependency "vibe-d" version="~>0.7.23"
-dependency "dunit" version="~>1.0.12"
+dependency "vibe-d" version="~>0.9.3"
+dependency "dunit" version="~>1.0.16"
 configuration "default" {
     targetType "executable"
     versions "VibeDefaultMain"

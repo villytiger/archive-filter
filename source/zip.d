@@ -5,7 +5,9 @@ import std.conv: to;
 import std.datetime: DateTime, SysTime;
 import std.system: Endian, endian;
 
-import vibe.core.stream: InputStream, OutputStream, RandomAccessStream;
+import vibe.core.stream: isInputStream, isOutputStream, isRandomAccessStream, RandomAccessStream, blocking, pipe;
+
+import eventcore.driver : IOMode;
 
 version (unittest) {
         import vibe.stream.memory: MemoryOutputStream, MemoryStream;
@@ -13,63 +15,106 @@ version (unittest) {
         import dunit.toolkit;
 }
 
-class UngetInputStream: InputStream {
+class BufferedInputStream(InputRandomAccessStream) : RandomAccessStream
+	if (isRandomAccessStream!InputRandomAccessStream)
+{
 private:
-	InputStream mStream;
-	ubyte[] mData;
-        ulong mCount = 0;
+	InputRandomAccessStream mStream;
+	ubyte[] mBuffer;
 
 public:
-	this(InputStream stream) {
+	this(InputRandomAccessStream stream) {
 		mStream = stream;
+		mBuffer.length = 0;
 	}
 
-        @property inout(InputStream) sourceStream() inout { return mStream; }
+@safe:
 
-        @property ulong count() const { return mCount; }
-
-        void unget(ubyte[] data) {
-		mData ~= data;
-                mCount -= data.length;
+        void putBack(ubyte[] data) {
+		mBuffer = data ~ mBuffer;
 	}
 
-	override @property bool empty() { return mData.empty() && mStream.empty(); }
+	@property bool readable() const nothrow { return mStream.readable; }
+	
+	@property ulong size() const nothrow { return mStream.size; }
+	
+	@property bool writable() const nothrow { return false; }
 
-	override @property ulong leastSize() { return mData.length + mStream.leastSize(); }
+	@property @blocking bool empty() { return mBuffer.empty() && mStream.empty(); }
 
-	override @property bool dataAvailableForRead() { return !mData.empty || mStream.dataAvailableForRead(); }
+	@property @blocking ulong leastSize() { return mBuffer.length + mStream.leastSize(); }
 
-	override const(ubyte)[] peek() { return mStream.peek(); }
+	@property bool dataAvailableForRead() { return !mBuffer.empty || mStream.dataAvailableForRead(); }
 
-	override void read(ubyte[] dst) {
-		if (!mData.empty) {
-			if (mData.length <= dst.length) {
-				size_t l = mData.length;
-				dst[0..mData.length] = mData[];
-				mData.length = 0;
-				mStream.read(dst[l..$]);
-			} else {
-				dst = mData[0..dst.length];
-				mData = mData[dst.length..$];
-			}
+	@blocking void seek(ulong offset) {
+		mBuffer.length = 0;
+		mStream.seek(offset);
+	}
+
+	ulong tell() nothrow {
+		return mStream.tell() - mBuffer.length;
+	}
+
+
+	@blocking void finalize() {}
+	
+	@blocking void flush() {}
+	
+	const(ubyte)[] peek() { return mBuffer ~ mStream.peek(); }
+
+	void fullBuffer(ulong size) {
+		size = min(size, mStream.leastSize());
+		if (mBuffer.length >= size)
+			return;
+
+		auto oldLength = mBuffer.length;
+		mBuffer.length = size;
+		mStream.read(mBuffer[oldLength..size], IOMode.all);
+	}
+
+	@blocking size_t write(in ubyte[] bytes, IOMode mode) { return 0; };
+ 
+	@blocking ulong read(scope ubyte[] dst, IOMode mode) {
+		ulong ret = 0;
+
+		if (mBuffer.length < 2048)
+			fullBuffer(4096);
+
+		if (mBuffer.length <= dst.length) {
+			ulong l = mBuffer.length;
+			dst[0..mBuffer.length] = mBuffer[];
+			ret = mBuffer.length;
+			mBuffer.length = 0;
+			ret += mStream.read(dst[l..$], mode);
+
 		} else {
-			mStream.read(dst);
+			dst[0..dst.length] = mBuffer[0..dst.length];
+			ret = dst.length;
+			mBuffer = mBuffer[dst.length..$];
 		}
 
-                mCount += dst.length;
+		return ret;
 	}
+
+	alias read = RandomAccessStream.read;
 }
 
-bool parse(T)(UngetInputStream input, void delegate(T) process) {
+BufferedInputStream!RandomAccessStream createBufferedInputStream(RandomAccessStream)(RandomAccessStream input)
+	if (isRandomAccessStream!RandomAccessStream)
+{
+	return new BufferedInputStream!RandomAccessStream(input);
+}
+
+bool parse(T, BufferedInputStream)(BufferedInputStream input, void delegate(T) process) {
         auto signature = input.get!uint();
-        input.unget(signature.nativeToLittleEndian);
+        input.putBack(signature.nativeToLittleEndian);
         if (signature != T.mHeader.MAGIC) return false;
 
         process(T(input));
         return true;
 }
 
-void parseAll(T)(UngetInputStream input, void delegate(T) process) {
+void parseAll(T, BufferedInputStream)(BufferedInputStream input, void delegate(T) process) {
         while (!input.empty) {
                 auto r = parse!T(input, process);
                 if (!r) return;
@@ -83,7 +128,9 @@ private:
         ExtraFields mExtraFields = void;
 
 public:
-        this(InputStream input) {
+        this(InputStream)(InputStream input)
+		if (isInputStream!InputStream)
+	{
                 input.read(mHeader.byteBuffer);
                 assert (mHeader.signature.fromLittleEndian == LocalFileHeader.MAGIC);
 
@@ -128,20 +175,26 @@ public:
                 return fromDosDateTime(mHeader.modificationDate, mHeader.modificationTime);
         }
 
-        void skipData(InputStream input) {
+        void skipData(InputStream)(InputStream input) 
+		if (isInputStream!InputStream)
+	{
                 input.skip(this.compressedSize);
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 output.write(mHeader.byteBuffer);
                 output.write(mFileName);
 
                 mExtraFields.write(output);
         }
 
-        void writeData(InputStream input, OutputStream output) {
+        void writeData(InputStream, OutputStream)(InputStream input, OutputStream output)
+		if (isInputStream!InputStream && isOutputStream!OutputStream)
+	{
                 auto s = this.compressedSize;
-                if (s) output.write(input, s);
+		if (s) pipe (input, output, s);
         }
 }
 
@@ -180,7 +233,7 @@ unittest {
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0x50, 0x80,
                 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!LocalFile(input, delegate(LocalFile file) {
@@ -200,7 +253,9 @@ private:
         ubyte[] mFileComment = void;
 
 public:
-        this(InputStream input) {
+        this(InputStream)(InputStream input)
+		if (isInputStream!InputStream)
+	{
                 input.read(mHeader.byteBuffer);
                 assert (mHeader.signature.fromLittleEndian == CentralDirectoryFileHeader.MAGIC);
 
@@ -256,7 +311,9 @@ public:
                 field.localHeaderOffset = offset;
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 output.write(mHeader.byteBuffer);
                 output.write(mFileName);
                 mExtraFields.write(output);
@@ -310,7 +367,7 @@ unittest {
                 0x00,
                 // Zip64 extended information extra field
                 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!CentralDirectoryFile(input, delegate(CentralDirectoryFile file) {
@@ -328,7 +385,9 @@ private:
         ubyte[] mExtensibleData = void;
 
 public:
-        this(InputStream input) {
+        this(InputStream)(InputStream input)
+		if (isInputStream!InputStream)
+	{
                 input.read(mHeader.byteBuffer);
                 assert (mHeader.signature.fromLittleEndian == Zip64EndOfCentralDirectoryRecordHeader.MAGIC);
 
@@ -357,7 +416,9 @@ public:
                 mHeader.centralDirectoryOffset = offset.toLittleEndian();
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 output.write(mHeader.byteBuffer);
                 output.write(mExtensibleData);
         }
@@ -386,7 +447,7 @@ unittest {
                 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // offset of start of central directory with respect to the starting disk number
                 0xa2, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryRecord(input, delegate(Zip64EndOfCentralDirectoryRecord record) {
@@ -404,7 +465,9 @@ private:
         Zip64EndOfCentralDirectoryLocatorHeader mHeader = void;
 
 public:
-        this(InputStream input) {
+        this(InputStream)(InputStream input)
+		if (isInputStream!InputStream)
+	{
                 input.read(mHeader.byteBuffer);
                 assert (mHeader.signature.fromLittleEndian == Zip64EndOfCentralDirectoryLocatorHeader.MAGIC);
         }
@@ -413,7 +476,9 @@ public:
                 mHeader.zip64EndOfCentralDirectoryRecordOffset = offset;
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 output.write(mHeader.byteBuffer);
         }
 }
@@ -429,7 +494,7 @@ unittest {
                 0xf8, 0x80, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00,
                 // total number of disks
                 0x01, 0x00, 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!Zip64EndOfCentralDirectoryLocator(input, delegate(Zip64EndOfCentralDirectoryLocator record) {
@@ -448,7 +513,9 @@ private:
         ubyte[] mFileComment = void;
 
 public:
-        this(InputStream input) {
+        this(InputStream)(InputStream input)
+		if (isInputStream!InputStream)
+	{
                 input.read(mHeader.byteBuffer);
                 assert (mHeader.signature.fromLittleEndian == EndOfCentralDirectoryRecordHeader.MAGIC);
 
@@ -490,7 +557,9 @@ public:
                 }
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 output.write(mHeader.byteBuffer);
                 output.write(mFileComment);
         }
@@ -515,7 +584,7 @@ unittest {
                 0xa2, 0x80, 0x4f, 0x00,
                 // .ZIP file comment length
                 0x00, 0x00];
-        auto input = new UngetInputStream(new MemoryStream(data, false));
+        auto input = createBufferedInputStream(new MemoryStream(data, false));
 
         auto timesCalled = 0;
         parse!EndOfCentralDirectoryRecord(input, delegate(EndOfCentralDirectoryRecord record) {
@@ -533,7 +602,9 @@ private:
         ubyte[][ushort] mExtraFields = void;
 
 public:
-        this(InputStream input, size_t length) {
+        this(InputStream)(InputStream input, size_t length)
+		if (isInputStream!InputStream)
+	{
                 while (length) {
                         auto headerId = input.get!ushort();
                         length -= headerId.sizeof;
@@ -556,7 +627,9 @@ public:
                 return inout(T)(p ? *p : null);
         }
 
-        void write(OutputStream output) {
+        void write(OutputStream)(OutputStream output)
+		if (isOutputStream!OutputStream)
+	{
                 foreach (headerId, field; mExtraFields) {
                         output.write(headerId.nativeToLittleEndian);
                         output.write(field.length.to!ushort.nativeToLittleEndian);
@@ -707,13 +780,17 @@ private T toLittleEndian(T)(T val) {
         else return val;
 }
 
-private type get(type)(InputStream stream) {
+private type get(type, InputStream)(InputStream stream)
+		if (isInputStream!InputStream)
+{
 	ubyte[type.sizeof] result;
 	stream.read(result);
 	return littleEndianToNative!type(result);
 }
 
-private void skip(InputStream stream, size_t length) {
+private void skip(InputStream)(InputStream stream, size_t length)
+		if (isInputStream!InputStream)
+{
         auto s = cast(RandomAccessStream)stream;
 	if (s) {
 		s.seek(s.tell() + length);

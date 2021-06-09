@@ -5,15 +5,17 @@ import std.path: globMatch;
 import std.range.primitives: popFront, popFrontN;
 import std.string: endsWith, indexOf, startsWith;
 
-import vibe.core.stream: InputStream, OutputStream;
-import vibe.stream.counting: CountingOutputStream;
+import vibe.core.stream: isRandomAccessStream, isOutputStream;
+import vibe.stream.counting: createCountingOutputStream;
 
-import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, UngetInputStream,
+import zip: CentralDirectoryFile, EndOfCentralDirectoryRecord, LocalFile, createBufferedInputStream,
         Zip64EndOfCentralDirectoryLocator, Zip64EndOfCentralDirectoryRecord, parse, parseAll;
 
-void sieveArchive(InputStream inputStream, OutputStream outputStream, ArchiveFilter filter) {
-        auto input = new UngetInputStream(inputStream);
-        auto output = new CountingOutputStream(outputStream);
+void sieveArchive(InputRandomAccessStream, OutputStream)(InputRandomAccessStream inputStream, OutputStream outputStream, ArchiveFilter filter)
+		if (isRandomAccessStream!InputRandomAccessStream && isOutputStream!OutputStream)
+{
+        auto input = createBufferedInputStream(inputStream);
+        auto output = createCountingOutputStream(outputStream);
 
         ulong[string] offsets;
         parseAll!LocalFile(input, delegate(LocalFile file) {
@@ -62,19 +64,6 @@ void sieveArchive(InputStream inputStream, OutputStream outputStream, ArchiveFil
                         record.centralDirectoryOffset = centralDirectoryOffset;
                         record.write(output);
                 });
-}
-
-string[] listArchive(InputStream inputStream, ArchiveFilter filter) {
-        auto input = new UngetInputStream(inputStream);
-        Appender!(string[]) result;
-
-        parseAll!LocalFile(input, delegate(LocalFile file) {
-                        file.skipData(input);
-                        auto name = file.name;
-                        if (filter.match(name)) result.put(name);
-                });
-
-        return result.data;
 }
 
 interface ArchiveFilter {
