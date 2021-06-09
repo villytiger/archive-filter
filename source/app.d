@@ -14,6 +14,7 @@ import vibe.http.fileserver: sendFile;
 import vibe.http.server: HTTPServerRequest, HTTPServerResponse, HTTPServerSettings, listenHTTP, render;
 import vibe.inet.path: Path;
 import vibe.textfilter.urlencode: urlEncode;
+import vibe.core.core: runApplication;
 
 import archive: ArchiveFilter, AddDirectoryFilter, EglobFilter, PathFilter, sieveArchive;
 
@@ -29,7 +30,13 @@ struct FileEntry {
 }
 
 void getArchive(string filePath, HTTPServerRequest req, HTTPServerResponse res) {
-        auto input = openFile(filePath);
+        if(req.query.get("path").empty()) {
+		sendFile(req, res, NativePath(filePath));
+		return;
+	}
+
+	
+	auto input = openFile(filePath);
         scope (exit) input.close();
 
         ArchiveFilter filter;
@@ -151,19 +158,24 @@ void processRequest(HTTPServerRequest req, HTTPServerResponse res) {
         auto action = req.query.get("action");
 
         if (filePath.getFileInfo().isDirectory) {
-                showLocalDirectory(filePath, urlPath, req, res);
-        } else if (!action) {
-                sendFile(req, res, Path(filePath));
-        } else if (!filePath.endsWith(".zip")) {
+		switch (action) {
+		case null:
+		case "show": showLocalDirectory(filePath, urlPath, req, res); break;
+		default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
+		}
+	} else if (filePath.endsWith(".zip")) {
+        	switch (action) {
+		case null:
+        	case "get": getArchive(filePath, req, res); break;
+        	case "show": showArchive(filePath, urlPath, req, res); break;
+        	default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
+        	}
+	} else if (filePath.getFileInfo().isFile)
+	{
+                sendFile(req, res, NativePath(filePath));
+	} else {
                 throw new HTTPStatusException(400, "Unsupported file type");
-        }
-
-        switch (action) {
-        case "list": listArchive(filePath, req, res); break;
-        case "get": getArchive(filePath, req, res); break;
-        case "show": showArchive(filePath, urlPath, req, res); break;
-        default: throw new HTTPStatusException(400, "Unkown action: " ~ action);
-        }
+	}
 }
 
 shared string gDocumentRoot;
@@ -181,8 +193,11 @@ shared static this() {
                 auto settings = new HTTPServerSettings;
                 settings.port = port;
                 settings.bindAddresses = ["::1", "127.0.0.1"];
-                listenHTTP(settings, &processRequest);
-        } catch (Exception e) {
+                auto listner = listenHTTP(settings, &processRequest);
+       		scope(exit) listner.stopListening();
+		
+		runApplication();
+	} catch (Exception e) {
                 import std.stdio: stderr;
                 stderr.writeln(e.msg ~ "\n");
         }
